@@ -1,6 +1,7 @@
 package edu.orm;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -9,8 +10,10 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-//import java.util.ArrayList;
-//import java.util.List;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 public abstract class JdbcUtils<E> {
 	
@@ -24,7 +27,7 @@ public abstract class JdbcUtils<E> {
 	
 	private Connection conn;
 
-	public JdbcUtils(String uri, String username, String password, String[] uri_parameters) {
+	public JdbcUtils(String uri, String username, String password, Map<String, String> uri_parameters) {
 		this.Init(uri, username, password, uri_parameters);
 	}
 	
@@ -32,11 +35,19 @@ public abstract class JdbcUtils<E> {
 		this.Init(uri, username, password, null);
 	}
 	
+	public void addNewUriParameter(String key, String value) {
+		if(this.uri_params == "")
+			this.uri_params += key + "=" + "value";
+		else
+			this.uri_params += "&" + key + "=" + "value";
+	}
+	
 	public void finalize() {
 		if(this.conn != null) {
 			if(this.conn != null) {
 				try {
 					this.conn.close();
+					this.conn = null;
 				} catch (SQLException se) {
 					se.printStackTrace();
 				}
@@ -44,29 +55,28 @@ public abstract class JdbcUtils<E> {
 		}
 	}
 	
-	private void Init(String uri, String username, String password, String[] uri_parameters) {
-		String uri_param = null;
-		if(uri_parameters != null) {
+	private void Init(String uri, String username, String password, Map<String, String> uri_parameters) {
+		if(uri_parameters != null && !uri_parameters.isEmpty()) {
 			StringBuffer uri_params = new StringBuffer();
-			for(int i = 0; i < uri_parameters.length; i++) {
-				uri_params.append(uri_parameters[i]);
+			uri_params.append("?");
+			for(Map.Entry<String, String> entry : uri_parameters.entrySet()) {
+				uri_params.append(entry.getKey()).append("=").append(entry.getValue());
 				uri_params.append('&');
 			}
 			uri_params.deleteCharAt(uri_params.length() - 1);
-			uri_param = uri_params.toString();
+			this.uri_params = uri_params.toString();
 		} else
-			uri_param = "";
+			this.uri_params = "";
 		this.uri = uri;
 		this.username = username;
 		this.password = password;
-		this.uri_params = uri_param;
 		this.conn = null;
 	}
 
 	public boolean Connection() {
 		try {
 			Class.forName("com.mysql.cj.jdbc.Driver");
-			this.conn = DriverManager.getConnection(this.uri + '?' + this.uri_params, this.username, this.password);
+			this.conn = DriverManager.getConnection(this.uri + this.uri_params, this.username, this.password);
 		} catch (Exception e) {
 			System.out.println("连接数据库失败！");
 			e.printStackTrace();
@@ -285,7 +295,6 @@ public abstract class JdbcUtils<E> {
 		return (Class) (actualTypeArguments[0]);
 	} 
 	
-//	public List<E> selectById(E element) {
 	public Object selectById(Object id) {
 		PreparedStatement pstmt = null;
 		if(this.conn == null)
@@ -327,15 +336,12 @@ public abstract class JdbcUtils<E> {
 				pstmt = this.conn.prepareStatement(sql.toString());
 				pstmt.setObject(1, idValue[0]);
 				rs = pstmt.executeQuery();
-				//List<E> ret = new ArrayList<E>();
 				while (rs.next()) {
 					for(int i = 0; i < fields.length; i++) {
 						fields[i].setAccessible(true);
 						if(!fields[i].isAnnotationPresent(Id.class) && !fields[i].isAnnotationPresent(Column.class))
 							continue;
 						String fieldType = fields[i].getType().toString().toLowerCase(); //字段类型
-						//System.out.println(fieldType);
-						//class java.lang.string
 						String columnType = ""; //列类型
 						String columnName = ""; //列名
 						StringBuilder methodName = new StringBuilder(); //字段set名
@@ -399,4 +405,136 @@ public abstract class JdbcUtils<E> {
 		}
 		return obj;
 	}
+	
+	public int delete(Map<String, Object> where) {
+		if(where == null || where.isEmpty())
+			throw new IllegalArgumentException("删除的条件为空.");
+		Class<E> clazz = (Class<E>) this.getType();
+		String tableName = this.getTableName(clazz);
+		StringBuilder sql = new StringBuilder();
+		sql.append("delete from ").append(tableName).append(" where ");
+		int len = 0;
+		for(String key : where.keySet()) {
+			sql.append(key).append(" = ? and ");
+			len++;
+		}
+		for(int i = 1; i <= 5; i++)
+			sql.deleteCharAt(sql.length() - 1);
+		Object[] whereObj = new Object[len];
+		int i = 0;
+		for(Object value : where.values())
+			whereObj[i] = value; 
+		return this.executeUpdate(sql.toString(), whereObj);
+	}
+	
+	public int delete(String key, Object value) {
+		Map<String, Object> where = new HashMap<String, Object>();
+		where.put(key, value);
+		return this.delete(where);
+	}
+	
+	public List<E> select(String select, Map<String, Object> where) {
+		PreparedStatement pstmt = null;
+		ResultSet result = null;
+		if(this.conn == null)
+			return null;
+		if(select == null || select.isEmpty())
+			select = "*";
+		Class<E> clazz = (Class<E>) this.getType();
+		String className = clazz.getName();
+		String tableName = this.getTableName(clazz);
+		Field[] fields = clazz.getDeclaredFields();
+		if(fields == null || fields.length == 0)
+			throw new RuntimeException(className + "没有属性.");
+		List<E> ret = new ArrayList<E>();
+		StringBuilder sql = new StringBuilder();
+		sql.append("select ").append(select).append(" from ").append(tableName).append(" where ");
+		int index = 1;
+		try {
+			for(String key : where.keySet())
+				sql.append(key).append(" = ? and ");
+			for(int i = 1; i <= 5; i++)
+				sql.deleteCharAt(sql.length() - 1);
+			pstmt = this.conn.prepareStatement(sql.toString());
+			for(Object value : where.values())
+				pstmt.setObject(index++, value);
+			result = pstmt.executeQuery();
+			while(result.next()) {
+				E obj = clazz.newInstance();
+				for(int i = 0; i < fields.length; i++) {
+					fields[i].setAccessible(true);
+					if(!fields[i].isAnnotationPresent(Id.class) && !fields[i].isAnnotationPresent(Column.class))
+						continue;
+					String fieldType = fields[i].getType().toString().toLowerCase(); //字段类型
+					String columnType = ""; //列类型
+					String columnName = ""; //列名
+					StringBuilder methodName = new StringBuilder(); //字段set名
+					if(fields[i].isAnnotationPresent(Id.class)) {
+						columnType = fields[i].getAnnotation(Id.class).type().toLowerCase();
+						columnName = fields[i].getAnnotation(Id.class).name();
+					} else {
+						columnType = fields[i].getAnnotation(Column.class).type().toLowerCase();
+						columnName = fields[i].getAnnotation(Column.class).name();
+					}
+					methodName.append("set").append(this.firstToUpper(fields[i].getName()));
+					try {
+						Method method = obj.getClass().getDeclaredMethod(methodName.toString(), fields[i].getType());
+						if(columnType == "datetime")
+							method.invoke(obj, DtsTool.getDatetime(result, columnName));
+						switch(fieldType) {
+						case "class java.lang.string":
+							method.invoke(obj, result.getString(columnName));
+							break;
+						case "int":
+						case "class java.lang.Integer":
+							method.invoke(obj, result.getInt(columnName));
+							break;
+						case "double":
+						case "class java.lang.Double":
+							method.invoke(obj, result.getDouble(columnName));
+							break;
+						default:
+							System.out.println("不支持的类型");
+							break;
+						}
+					} catch (NoSuchMethodException e) {
+						System.out.println("没有找到方法" + methodName.toString());
+						e.printStackTrace();
+					} catch(IllegalArgumentException | InvocationTargetException ee) {
+						ee.printStackTrace();
+					}
+				}
+				ret.add(obj);
+			}
+		} catch (SQLException se) {
+			System.out.println("查询数据库失败！");
+			//se.printStackTrace();
+			System.out.println(se.getMessage());
+		} catch(InstantiationException | IllegalAccessException ee) {
+			ee.printStackTrace();
+		} finally {
+			if(pstmt != null) {
+				try {
+					pstmt.close();
+				} catch (SQLException se1) {
+					se1.printStackTrace();
+				}
+			}
+			if(result != null) {
+				try {
+					result.close();
+				} catch (SQLException se2) {
+					se2.printStackTrace();
+				}
+			}
+		}
+		return ret;
+	}
+	
+	public E select(String select, String key, Object value) {
+		Map<String, Object> where = new HashMap<String, Object>();
+		where.put(key, value);
+		return this.select(select, where).get(0);
+	}
 }
+
