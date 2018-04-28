@@ -7,7 +7,8 @@
 3. Initialization the child class by uri, username, password and parameters array;
 4. Use `JdbcUtils#Connection()` function to connect to the MySQL database;
 5. You can use `insert`, `updateById`, `deleteById` and `selectById`;
-6. And NOW you can use `delete` and `select` functions.
+6. You can use `delete` and `select` function;
+7. NOW you can use `setAutoCommit()`, `commit()`, `rollback()`, `rollback(sp)` and `getSavepoint()` to transactional.
 
 ## Note:
 1. If you MySQL database have used `datetime`, it can only be converted into `String`;

@@ -10,6 +10,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -26,6 +27,12 @@ public abstract class JdbcUtils<E> {
 	private String uri_params;
 	
 	private Connection conn;
+	
+	private PreparedStatement pstmt;
+	
+	private ResultSet result;
+	
+	private boolean isAutoCommit;
 
 	public JdbcUtils(String uri, String username, String password, Map<String, String> uri_parameters) {
 		this.Init(uri, username, password, uri_parameters);
@@ -42,15 +49,103 @@ public abstract class JdbcUtils<E> {
 			this.uri_params += "&" + key + "=" + "value";
 	}
 	
+	public void setAutoCommit() {
+		try {
+			this.isAutoCommit = false;
+			this.conn.setAutoCommit(false);
+		} catch (SQLException e) {
+			// TODO 自动生成的 catch 块
+			this.isAutoCommit = true;
+			e.printStackTrace();
+		}
+	}
+	
+	public void commit() {
+		if(this.isAutoCommit == false) {
+			if(this.pstmt != null) {
+				try {
+					this.conn.commit();
+				} catch (SQLException e) {
+					// TODO 自动生成的 catch 块
+					e.printStackTrace();
+				}
+				try {
+					this.pstmt.close();
+				} catch (SQLException e) {
+					// TODO 自动生成的 catch 块
+					e.printStackTrace();
+				}
+				this.pstmt = null;
+			}
+		}
+	}
+	
+	public void rollback() {
+		if(this.isAutoCommit == false) {
+			if(this.pstmt != null) {
+				try {
+					this.conn.rollback();
+				} catch (SQLException e) {
+					// TODO 自动生成的 catch 块
+					e.printStackTrace();
+				}
+				try {
+					this.pstmt.close();
+				} catch (SQLException e) {
+					// TODO 自动生成的 catch 块
+					e.printStackTrace();
+				}
+				this.pstmt = null;
+			}
+		}
+	}
+	
+	public Savepoint getSavepoint() {
+		Savepoint sp = null;
+		try {
+			sp = this.conn.setSavepoint();
+		} catch (SQLException e) {
+			// TODO 自动生成的 catch 块
+			e.printStackTrace();
+		}
+		return sp;
+	}
+	
+	public void rollback(Savepoint sp) {
+		if(this.isAutoCommit == false) {
+			if(this.pstmt != null) {
+				try {
+					this.conn.rollback(sp);
+				} catch (SQLException e) {
+					// TODO 自动生成的 catch 块
+					e.printStackTrace();
+				}
+				try {
+					this.pstmt.close();
+				} catch (SQLException e) {
+					// TODO 自动生成的 catch 块
+					e.printStackTrace();
+				}
+				this.pstmt = null;
+			}
+		}
+	}
+
 	public void finalize() {
 		if(this.conn != null) {
-			if(this.conn != null) {
-				try {
-					this.conn.close();
-					this.conn = null;
-				} catch (SQLException se) {
-					se.printStackTrace();
-				}
+			try {
+				this.conn.close();
+				this.conn = null;
+			} catch (SQLException se1) {
+				se1.printStackTrace();
+			}
+		}
+		if(this.pstmt != null) {
+			try {
+				this.pstmt.close();
+				this.pstmt = null;
+			} catch (SQLException se2) {
+				se2.printStackTrace();
 			}
 		}
 	}
@@ -71,6 +166,9 @@ public abstract class JdbcUtils<E> {
 		this.username = username;
 		this.password = password;
 		this.conn = null;
+		this.pstmt = null;
+		this.result = null;
+		this.isAutoCommit = true;
 	}
 
 	public boolean Connection() {
@@ -86,25 +184,29 @@ public abstract class JdbcUtils<E> {
 	}
 	
 	private int executeUpdate(String sql, Object[] parameters) {
-		PreparedStatement pstmt = null;
 		int result = -1;
 		if(this.conn == null)
 			return result;
 		try {
-			pstmt = this.conn.prepareStatement(sql);
+			this.pstmt = this.conn.prepareStatement(sql);
 			for(int i = 0; i < parameters.length; i++)
-				pstmt.setObject(i+1, parameters[i]);
-			result = pstmt.executeUpdate();
+				this.pstmt.setObject(i+1, parameters[i]);
+			result = this.pstmt.executeUpdate();
 		} catch (SQLException se) {
 			System.out.println("更新数据库失败！");
+			if(this.isAutoCommit == false)
+				this.rollback();
 			//se.printStackTrace();
 			System.out.println(se.getMessage());
 		} finally {
-			if(pstmt != null) {
-				try {
-					pstmt.close();
-				} catch (SQLException se2) {
-					se2.printStackTrace();
+			if(this.isAutoCommit == true) {
+				if(this.pstmt != null) {
+					try {
+						this.pstmt.close();
+						this.pstmt = null;
+					} catch (SQLException se) {
+						se.printStackTrace();
+					}
 				}
 			}
 		}
@@ -254,31 +356,21 @@ public abstract class JdbcUtils<E> {
 		return this.executeUpdate(sql.toString(), idValue);
 	}
 	
-//	private ResultSet executeQuery(String sql, Object[] parameters) {
-//		PreparedStatement pstmt = null;
-//		ResultSet result = null;
-//		if(this.conn == null)
-//			return null;
-//		try {
-//			pstmt = this.conn.prepareStatement(sql);
-//			for(int i = 0; i < parameters.length; i++)
-//				pstmt.setObject(i+1, parameters[i]);
-//			result = pstmt.executeQuery();
-//		} catch (SQLException se) {
-//			System.out.println("查询数据库失败！");
-//			//se.printStackTrace();
-//			System.out.println(se.getMessage());
-//		} finally {
-//			if(pstmt != null) {
-//				try {
-//					pstmt.close();
-//				} catch (SQLException se2) {
-//					se2.printStackTrace();
-//				}
-//			}
-//		}
-//		return result;
-//	}
+	private ResultSet executeQuery(String sql, Object[] parameters) {
+		if(this.conn == null)
+			return null;
+		try {
+			this.pstmt = this.conn.prepareStatement(sql);
+			for(int i = 0; i < parameters.length; i++)
+				this.pstmt.setObject(i+1, parameters[i]);
+			this.result = this.pstmt.executeQuery();
+		} catch (SQLException se) {
+			System.out.println("查询数据库失败！");
+			//se.printStackTrace();
+			System.out.println(se.getMessage());
+		}
+		return this.result;
+	}
 	
 	private String firstToUpper(String str) {
 		char[] ch = str.toCharArray();
@@ -296,7 +388,6 @@ public abstract class JdbcUtils<E> {
 	} 
 	
 	public Object selectById(Object id) {
-		PreparedStatement pstmt = null;
 		if(this.conn == null)
 			return null;
 		if(id == null || (String)id== "")
@@ -331,12 +422,9 @@ public abstract class JdbcUtils<E> {
 			if(idName == "")
 				throw new RuntimeException(className + "没有Id属性.");
 			sql.append(idName).append(" = ?");
-			ResultSet rs = null;
 			try {
-				pstmt = this.conn.prepareStatement(sql.toString());
-				pstmt.setObject(1, idValue[0]);
-				rs = pstmt.executeQuery();
-				while (rs.next()) {
+				this.result = executeQuery(sql.toString(), idValue);
+				while (this.result.next()) {
 					for(int i = 0; i < fields.length; i++) {
 						fields[i].setAccessible(true);
 						if(!fields[i].isAnnotationPresent(Id.class) && !fields[i].isAnnotationPresent(Column.class))
@@ -356,18 +444,18 @@ public abstract class JdbcUtils<E> {
 						try {
 							Method method = obj.getClass().getDeclaredMethod(methodName.toString(), fields[i].getType());
 							if(columnType == "datetime")
-								method.invoke(obj, DtsTool.getDatetime(rs, columnName));
+								method.invoke(obj, DtsTool.getDatetime(this.result, columnName));
 							switch(fieldType) {
 							case "class java.lang.string":
-								method.invoke(obj, rs.getString(columnName));
+								method.invoke(obj, this.result.getString(columnName));
 								break;
 							case "int":
 							case "class java.lang.Integer":
-								method.invoke(obj, rs.getInt(columnName));
+								method.invoke(obj, this.result.getInt(columnName));
 								break;
 							case "double":
 							case "class java.lang.Double":
-								method.invoke(obj, rs.getDouble(columnName));
+								method.invoke(obj, this.result.getDouble(columnName));
 								break;
 							default:
 								System.out.println("不支持的类型");
@@ -385,18 +473,22 @@ public abstract class JdbcUtils<E> {
 			} catch(Exception e) {
 				e.printStackTrace();
 			} finally {
-				if(rs != null) {
+				if(this.result != null) {
 					try {
-						rs.close();
+						this.result.close();
 					} catch(SQLException e) {
 						e.printStackTrace();
 					}
 				}
-				if(pstmt != null) {
-					try {
-						pstmt.close();
-					} catch (SQLException se2) {
-						se2.printStackTrace();
+				if(this.pstmt != null) {
+					if(this.isAutoCommit == false)
+						this.commit();
+					else {
+						try {
+							this.pstmt.close();
+						} catch (SQLException se2) {
+							se2.printStackTrace();
+						}
 					}
 				}
 			}
@@ -434,8 +526,6 @@ public abstract class JdbcUtils<E> {
 	}
 	
 	public List<E> select(String select, Map<String, Object> where) {
-		PreparedStatement pstmt = null;
-		ResultSet result = null;
 		if(this.conn == null)
 			return null;
 		if(select == null || select.isEmpty())
@@ -455,11 +545,11 @@ public abstract class JdbcUtils<E> {
 				sql.append(key).append(" = ? and ");
 			for(int i = 1; i <= 5; i++)
 				sql.deleteCharAt(sql.length() - 1);
-			pstmt = this.conn.prepareStatement(sql.toString());
+			this.pstmt = this.conn.prepareStatement(sql.toString());
 			for(Object value : where.values())
-				pstmt.setObject(index++, value);
-			result = pstmt.executeQuery();
-			while(result.next()) {
+				this.pstmt.setObject(index++, value);
+			this.result = this.pstmt.executeQuery();
+			while(this.result.next()) {
 				E obj = clazz.newInstance();
 				for(int i = 0; i < fields.length; i++) {
 					fields[i].setAccessible(true);
@@ -513,11 +603,15 @@ public abstract class JdbcUtils<E> {
 		} catch(InstantiationException | IllegalAccessException ee) {
 			ee.printStackTrace();
 		} finally {
-			if(pstmt != null) {
-				try {
-					pstmt.close();
-				} catch (SQLException se1) {
-					se1.printStackTrace();
+			if(this.pstmt != null) {
+				if(this.isAutoCommit == false)
+					this.commit();
+				else {
+					try {
+						this.pstmt.close();
+					} catch (SQLException se1) {
+						se1.printStackTrace();
+					}
 				}
 			}
 			if(result != null) {
@@ -537,4 +631,3 @@ public abstract class JdbcUtils<E> {
 		return this.select(select, where).get(0);
 	}
 }
-
